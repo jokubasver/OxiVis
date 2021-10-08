@@ -52,15 +52,14 @@ const char* time_zone_string =  "CET-1CEST,M3.5.0/2,M10.5.0/3"; // Posix TZ stri
 // The remote service we wish to connect to.
 static BLEUUID serviceUUID("49535343-fe7d-4ae5-8fa9-9fafd205e455");
 // The characteristic of the remote service we are interested in.
-static BLEUUID    charOximeterUUID("49535343-1e4d-4bd9-ba61-23c647249616");
 // The address of the target device (needed for connection when the device does not properly advertise services)
-static BLEAddress berryMed("00:a0:50:db:83:94");
 
 static boolean doConnect = false;
 static boolean connected = false;
 static boolean connectionStarted = false;
 static boolean doScan = false;
 static BLERemoteCharacteristic* pRemoteCharacteristicOximeter;
+static BLERemoteCharacteristic* pRemoteCharacteristicNotification;
 static BLEAdvertisedDevice* myDevice;
 static BLEClient* pClient;
 static unsigned int messageCounter = 0;
@@ -79,6 +78,10 @@ uint32_t timeStampNotification = 0;
 uint8_t currentBpm = 0;
 uint8_t currentSpo2 = 0;
 static boolean sendNewConnectionMessage = false;
+
+byte notificationOn[1][3] = {
+      {0x9b, 0x01, 0x1c} 
+    };
 
 WiFiClient espClient;
 PubSubClient mqttClient(espClient); //lib required for mqtt
@@ -160,19 +163,19 @@ static void notifyCallback(
     // so we get about 72--75 measurements per second (50--70ms advertised)
     // i.e. one every 13ms or so
     
-//    Serial.print("Notify callback for characteristic ");
-//    Serial.print(pBLERemoteCharacteristic->getUUID().toString().c_str());
-//    Serial.print(" of data length ");
-//    Serial.println(length);
-//    Serial.print("data (HEX): ");
-//    for (int i = 0; i < length; i++) {
-//      Serial.print(pData[i],HEX);
-//      Serial.print(" ");
-//    }
-//    Serial.println();
+    Serial.print("Notify callback for characteristic ");
+    Serial.print(pBLERemoteCharacteristic->getUUID().toString().c_str());
+    Serial.print(" of data length ");
+    Serial.println(length);
+    Serial.print("data: ");
+    for (int i = 0; i < length; i++) {
+      Serial.print(pData[i]);
+      Serial.print(" ");
+    }
+    Serial.println();
 
     // save data to buffer
-    int packetCount = length / 5;
+    int packetCount = length / 2;
     if (packetCount != 4) DEBUG_PRINTLN("Incorrect packet length!!!");
     else {
       timeStampNotification = millis();
@@ -183,7 +186,7 @@ static void notifyCallback(
       dataBuffer[bufferPointer] = (uint8_t)(timeStampNotification & 0xff); bufferPointer++;
       for (int i = 0; i < packetCount; i++) {
         int basisPointer = i*5;
-        dataBuffer[bufferPointer] = pData[basisPointer + 1]; bufferPointer++; // PPG
+        dataBuffer[bufferPointer] = pData[basisPointer + 7]; bufferPointer++; // PPG
         dataBuffer[bufferPointer] = pData[basisPointer + 3]; bufferPointer++; // BPM
         dataBuffer[bufferPointer] = pData[basisPointer + 4]; bufferPointer++; // SPO2
       }
@@ -230,6 +233,15 @@ static void notifyCallback(
 //      Serial.println("");
 //    }
 
+  DEBUG_PRINT("BPM: ");
+  DEBUG_PRINT(currentBpm);
+  DEBUG_PRINTLN("");
+  DEBUG_PRINT("SPO2: ");
+  DEBUG_PRINT(currentSpo2);
+  DEBUG_PRINTLN("");
+  DEBUG_PRINT("PPG: ");
+  DEBUG_PRINT(pData[7]);
+  DEBUG_PRINTLN("");
   messageCounter += 1;
 }
 
@@ -301,8 +313,17 @@ bool connectToServer() {
     pClient->disconnect();
     return false;
   }
+  pRemoteCharacteristicNotification = pRemoteService->getCharacteristic(charNotificationUUID);
+  if (pRemoteCharacteristicNotification == nullptr) {
+    DEBUG_PRINT("Failed to find our Notification characteristic UUID: ");
+    DEBUG_PRINTLN(charNotificationUUID.toString().c_str());
+    pClient->disconnect();
+    return false;
+  }
   DEBUG_PRINT(" - Found our characteristic ");
   DEBUG_PRINTLN(charOximeterUUID.toString().c_str());
+  DEBUG_PRINT(" - Found our Notification characteristic ");
+  DEBUG_PRINTLN(charNotificationUUID.toString().c_str());
 
   // Read the value of the characteristic.
   if(pRemoteCharacteristicOximeter->canRead()) {
@@ -322,23 +343,50 @@ bool connectToServer() {
   else {
     DEBUG_PRINTLN(" - Our characteristic cannot be read.");
   }
+  if(pRemoteCharacteristicNotification->canRead()) {
+    DEBUG_PRINTLN(" - Our Notification characteristic can be read.");
+//    std::string value = pRemoteCharacteristicNotification->readValue();
+//#ifdef DEBUG
+//    byte buf[64]= {0};
+//    memcpy(buf,value.c_str(),value.length());
+//    Serial.print("The Notification characteristic value was: ");
+//    for (int i = 0; i < value.length(); i++) {
+//      Serial.print(buf[i],HEX);
+//      Serial.print(" ");
+//    }
+//    Serial.println();
+//#endif
+  }
+  else {
+    DEBUG_PRINTLN(" - Our Notification characteristic cannot be read.");
+  }
 
   if(pRemoteCharacteristicOximeter->canNotify()) {
     DEBUG_PRINTLN(" - Our characteristic can notify us, registering notification callback.");
     pRemoteCharacteristicOximeter->registerForNotify(notifyCallback, true);
-    
-    // needed to actually start the notifications for the BerryMed oximeter:
-    const uint8_t notificationOn[] = {0x1, 0x0};
-    pRemoteCharacteristicOximeter->getDescriptor(BLEUUID((uint16_t)0x2902))->writeValue((uint8_t*)notificationOn, 2, true);
   }
   else {
     DEBUG_PRINTLN(" - Our characteristic cannot notify us.");
+  }
+  
+  if(pRemoteCharacteristicNotification->canNotify()) {
+    DEBUG_PRINTLN(" - Our Notification characteristic can notify us, registering notification callback.");
+    pRemoteCharacteristicNotification->registerForNotify(notifyCallback, true);
+  }
+  else {
+    DEBUG_PRINTLN(" - Our Notification characteristic cannot notify us.");
   }
 
   if (pRemoteCharacteristicOximeter->canIndicate() == true) {
     DEBUG_PRINTLN(" - Our characteristic can indicate.");
   } else {
     DEBUG_PRINTLN(" - Our characteristic cannot indicate.");
+  }
+
+  if (pRemoteCharacteristicNotification->canIndicate() == true) {
+    DEBUG_PRINTLN(" - Our Notification characteristic can indicate.");
+  } else {
+    DEBUG_PRINTLN(" - Our Notification characteristic cannot indicate.");
   }
 
   connected = true;
@@ -371,7 +419,7 @@ class MyAdvertisedDeviceCallbacks: public BLEAdvertisedDeviceCallbacks {
     else {DEBUG_PRINTLN("Device does not have Service UUID");}
     
     // We have found a device, let us now see if it contains the service we are looking for.
-    if ((advertisedDevice.haveServiceUUID() && advertisedDevice.isAdvertisingService(serviceUUID)) || (advertisedDevice.getAddress().equals(berryMed))) {
+    if ((advertisedDevice.haveServiceUUID() && advertisedDevice.isAdvertisingService(serviceUUID)) || (advertisedDevice.getAddress().equals(CMS50DBT))) {
       DEBUG_PRINTLN("Found a device that contains the service we are looking for.");
       BLEDevice::getScan()->stop();
       myDevice = new BLEAdvertisedDevice(advertisedDevice);
@@ -520,6 +568,9 @@ void loop() {
 //    DEBUG_PRINT("Notifications during the last second: ");
 //    DEBUG_PRINTLN(messageCounter);
     messageCounter = 0;
+    
+    // needed to actually start the notifications for the CMS50D-BT oximeter:
+    pRemoteCharacteristicNotification->writeValue(notificationOn[0], sizeof(notificationOn[0]));
   }
   else {
     if (doScan) {
