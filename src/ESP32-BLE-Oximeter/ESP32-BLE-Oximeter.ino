@@ -50,9 +50,12 @@ const char* mqtt_alive_topic =  "sensors/oximeter/keepalive";
 const char* time_zone_string =  "CET-1CEST,M3.5.0/2,M10.5.0/3"; // Posix TZ string for Europe, including DST 
 
 // The remote service we wish to connect to.
-static BLEUUID serviceUUID("49535343-fe7d-4ae5-8fa9-9fafd205e455");
+static BLEUUID serviceUUID("0000ff12-0000-1000-8000-00805f9b34fb");
 // The characteristic of the remote service we are interested in.
+static BLEUUID    charOximeterUUID("0000ff02-0000-1000-8000-00805f9b34fb");
+static BLEUUID    charNotificationUUID("0000ff01-0000-1000-8000-00805f9b34fb");
 // The address of the target device (needed for connection when the device does not properly advertise services)
+static BLEAddress CMS50DBT("d7:d6:d5:21:61:00");
 
 static boolean doConnect = false;
 static boolean connected = false;
